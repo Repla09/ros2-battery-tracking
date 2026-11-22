@@ -17,12 +17,14 @@ Battery of the underwater vehicle.
 
 Publishes the battery level in percent (std_msgs/Float32) on /battery_level.
 The level starts at 100, drops by 1 every second and never goes below 0.
+The /recharge service (std_srvs/Trigger) fills the battery back to 100.
 """
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Float32
+from std_srvs.srv import Trigger
 
 FULL_LEVEL = 100.0
 EMPTY_LEVEL = 0.0
@@ -43,6 +45,7 @@ class BatteryNode(Node):
         update_period = self.get_parameter('update_period').value
 
         self.level_publisher = self.create_publisher(Float32, 'battery_level', 10)
+        self.recharge_service = self.create_service(Trigger, 'recharge', self.on_recharge)
         self.drain_timer = self.create_timer(update_period, self.on_drain_timer)
 
         self.get_logger().info(
@@ -63,6 +66,16 @@ class BatteryNode(Node):
             if self.level == EMPTY_LEVEL:
                 self.get_logger().warning('Battery is empty')
         self.publish_level()
+
+    def on_recharge(self, request, response):
+        """Handle /recharge: fill the battery back to 100 %."""
+        previous_level = self.level
+        self.level = FULL_LEVEL
+        self.publish_level()
+        self.get_logger().info(f'Recharged from {previous_level:.1f}% to {self.level:.1f}%')
+        response.success = True
+        response.message = 'Battery recharged'
+        return response
 
 
 def main(args=None):
