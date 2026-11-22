@@ -39,6 +39,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'battery_node = battery_odev.battery_node:main',
         ],
     },
 )
