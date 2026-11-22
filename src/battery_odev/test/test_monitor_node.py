@@ -12,11 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for monitor_node: printing and the low battery warning."""
+"""Tests for monitor_node: printing, the low battery warning and auto recharge."""
 
+import time
+
+from battery_odev.battery_node import BatteryNode
 from battery_odev.monitor_node import MonitorNode
 import pytest
 import rclpy
+from rclpy.executors import SingleThreadedExecutor
+from rclpy.parameter import Parameter
 from std_msgs.msg import Float32
 
 
@@ -71,3 +76,47 @@ def test_warning_stops_when_level_rises(monitor, logs):
     assert [level for level, _ in logs] == ['warning', 'info', 'info']
     assert 'warning cleared' in logs[1][1]
     assert not monitor.low_battery
+
+
+def test_no_recharge_at_5_percent_or_more(monitor, logs):
+    feed(monitor, 6.0, 5.0)
+    assert monitor.pending_recharge is None
+    assert not any('/recharge' in message for _, message in logs)
+
+
+def test_waits_when_recharge_service_is_missing(monitor, logs):
+    feed(monitor, 4.0)
+    assert monitor.pending_recharge is None
+    assert logs[-1] == ('warning', '/recharge service is not available, will try again')
+
+
+def test_sends_only_one_request_at_a_time(monitor, logs):
+    battery = BatteryNode()
+    assert monitor.recharge_client.wait_for_service(timeout_sec=5.0)
+    feed(monitor, 4.0)
+    first_request = monitor.pending_recharge
+    feed(monitor, 3.0, 2.0)
+    assert first_request is not None
+    assert monitor.pending_recharge is first_request
+    assert sum('calling /recharge' in message for _, message in logs) == 1
+    battery.destroy_node()
+
+
+def test_recharges_itself_below_5_percent(monitor, logs):
+    battery = BatteryNode(parameter_overrides=[
+        Parameter('initial_level', value=8.0),
+        Parameter('update_period', value=0.05),
+    ])
+    executor = SingleThreadedExecutor()
+    executor.add_node(battery)
+    executor.add_node(monitor)
+
+    deadline = time.monotonic() + 10.0
+    while monitor.last_recharge_message is None and time.monotonic() < deadline:
+        executor.spin_once(timeout_sec=0.1)
+
+    assert monitor.last_recharge_message == 'Battery recharged'
+    assert ('info', '/recharge replied: "Battery recharged"') in logs
+    assert battery.level > 90.0
+    executor.shutdown()
+    battery.destroy_node()
